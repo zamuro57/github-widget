@@ -1,49 +1,91 @@
 ###
-
-minify: 
-
+# to minify: 
 java -jar /usr/local/closure-compiler/compiler.jar \
   --compilation_level SIMPLE_OPTIMIZATIONS \
   --js github-widget.js \
   --js_output_file github-widget.min.js
-  
 ###
 
-go = ->
-  head = document.getElementsByTagName('head')[0]
-  for div, i in document.getElementsByTagName 'div'
-    continue unless div.className is 'github-widget'
-    user = div.getAttribute 'data-user'
-    callback = "githubWidgetJSONPCallback_#{i}"
-    window[callback] = ((div, user) -> 
-      (payload) ->
-        tag className: 'gw-clearer', prevSibling: div
-        siteRepoName = "#{user}.github.com"
-        for repo in payload.data.sort((a, b) -> b.watchers - a.watchers)
-          continue if repo.fork or repo.name is siteRepoName or not repo.description? or repo.description is ''
-          repoOuterTag = tag className: 'gw-repo-outer', parent: div
-          repoTag = tag className: 'gw-repo', parent: repoOuterTag
-          titleTag = tag className: 'gw-title', parent: repoTag
-          statsTag = tag name: 'ul', className: 'gw-stats', parent: titleTag
-          tag name: 'a', href: repo.html_url, text: repo.name, className: 'gw-name', parent: titleTag
-          tag name: 'li', text: "#{repo.watchers}", className: 'gw-watchers', parent: statsTag
-          tag name: 'li', text: "#{repo.forks}", className: 'gw-forks', parent: statsTag
-          tag className: 'gw-lang', text: repo.language, parent: repoTag
-          tag text: repo.description, className: 'gw-repo-desc', parent: repoTag
-    )(div, user)
-    url = "https://api.github.com/users/#{user}/repos?callback=#{callback}"
-    tag name: 'script', src: url, parent: head
+###* @preserve https://github.com/jawj/github-widget
+Copyright (c) 2011 - 2012 George MacKerron
+Released under the MIT licence: http://opensource.org/licenses/mit-license ###
 
-tag = (opts) ->
-  t = document.createElement opts.name ? 'div'
+makeWidget = (payload, div) ->
+  make cls: 'gw-clearer', prevSib: div
+  user = div.getAttribute 'data-user'
+  siteRepoName = "#{user}.github.com"
+  for repo in payload.data.sort((a, b) -> b.watchers - a.watchers)
+    continue if repo.fork or repo.name is siteRepoName or not repo.description
+    make parent: div, cls: 'gw-repo-outer', kids: [
+      make cls: 'gw-repo', kids: [
+        make cls: 'gw-title', kids: [
+          make tag: 'ul', cls: 'gw-stats', kids: [
+            make tag: 'li', text: repo.watchers, cls: 'gw-watchers'
+            make tag: 'li', text: repo.forks, cls: 'gw-forks']
+          make tag: 'a', href: repo.html_url, text: repo.name, cls: 'gw-name']
+        make cls: 'gw-lang', text: repo.language if repo.language?
+        make cls: 'gw-repo-desc', text: repo.description]]
+
+init = ->
+  for div in (get tag: 'div', cls: 'github-widget')
+    do (div) ->  # close over correct div
+      url = "https://api.github.com/users/#{div.getAttribute 'data-user'}/repos?callback=<cb>"
+      jsonp url: url, success: (payload) -> makeWidget payload, div
+
+
+# support functions
+
+cls = (el, opts = {}) ->  # cut-down version: no manipulation support
+  classHash = {}  
+  classes = el.className.match(cls.re)
+  if classes?
+    (classHash[c] = yes) for c in classes
+  hasClasses = opts.has?.match(cls.re)
+  if hasClasses?
+    (return no unless classHash[c]) for c in hasClasses
+    return yes
+  null
+
+cls.re = /\S+/g
+
+get = (opts = {}) ->  
+  inside = opts.inside ? document
+  tag = opts.tag ? '*'
+  if opts.id?
+    return inside.getElementById opts.id
+  hasCls = opts.cls?
+  if hasCls and tag is '*' and inside.getElementsByClassName?
+    return inside.getElementsByClassName opts.cls
+  els = inside.getElementsByTagName tag
+  if hasCls then els = (el for el in els when cls el, has: opts.cls)
+  if not opts.multi? and tag.toLowerCase() in get.uniqueTags then els[0] ? null else els
+
+get.uniqueTags = 'html body frameset head title base'.split(' ')
+
+text = (t) -> document.createTextNode '' + t
+
+make = (opts = {}) ->  # opts: tag, parent, prevSib, text, cls, [attrib]
+  t = document.createElement opts.tag ? 'div'
   for own k, v of opts
     switch k
-      when 'name' then continue
+      when 'tag' then continue
       when 'parent' then v.appendChild t
-      when 'prevSibling' then v.parentNode.insertBefore t, v.nextSibling
-      when 'text' then t.appendChild document.createTextNode(v)
+      when 'kids' then t.appendChild c for c in v when c?
+      when 'prevSib' then v.parentNode.insertBefore t, v.nextSibling
+      when 'text' then t.appendChild text v
+      when 'cls' then t.className = v
       else t[k] = v
   t
 
-if document.addEventListener then document.addEventListener 'DOMContentLoaded', go, no
-else if window.attachEvent then window.attachEvent 'onload', go
+jsonp = (opts) ->
+  callbackName = opts.callback ? '_JSONPCallback_' + jsonp.callbackNum++
+  url = opts.url.replace '<cb>', callbackName
+  window[callbackName] = opts.success ? jsonp.noop
+  make tag: 'script', src: url, parent: (get tag: 'head')
+
+jsonp.callbackNum = 0
+jsonp.noop = ->
+
+# do it!
+
+init()
